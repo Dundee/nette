@@ -16,7 +16,7 @@ use Nette;
 
 
 /**
- * Memcached storage.
+ * Memcached storage with lazy initialization
  *
  * @author     David Grudl
  */
@@ -30,11 +30,18 @@ class MemcachedStorage extends Nette\Object implements ICacheStorage
 	/** @var Memcache */
 	private $memcache;
 
-	/** @var string */
-	private $prefix;
-
 	/** @var ICacheJournal */
 	private $journal;
+	
+	/** @var array default configuration */
+	private $options = array(
+		'prefix' => '',
+		'host'   => 'localhost',
+		'port'   => 11211,
+	);
+	
+	/** @var bool */
+	private $isConnected = FALSE;
 
 
 
@@ -55,16 +62,45 @@ class MemcachedStorage extends Nette\Object implements ICacheStorage
 			throw new \NotSupportedException("PHP extension 'memcache' is not loaded.");
 		}
 
-		$this->prefix = $prefix;
+		$this->options['host'] = $host;
+		$this->options['port'] = $port;
+		$this->options['prefix'] = $prefix;
 		$this->journal = $journal;
+	}
+	
+	/**
+	 * Sets options.
+	 * @param  array
+	 * @return MemcachedStorage
+	 */
+	public function setOptions($options)
+	{
+		$this->options = $options + $this->options;
+		return $this;
+	}
+	
+	/**
+	 * Returns options.
+	 * @return array
+	 */
+	public function getOptions()
+	{
+		return $this->options;
+	}
+
+	/**
+	 * Connect to memcache server
+	 */
+	public function connect()
+	{
 		$this->memcache = new \Memcache;
 		Nette\Debug::tryError();
-		$this->memcache->connect($host, $port);
+		$this->memcache->connect($this->options['host'], $this->options['port']);
 		if (Nette\Debug::catchError($e)) {
 			throw new \InvalidStateException($e->getMessage());
 		}
+		$this->isConnected = TRUE;
 	}
-
 
 
 	/**
@@ -74,7 +110,8 @@ class MemcachedStorage extends Nette\Object implements ICacheStorage
 	 */
 	public function read($key)
 	{
-		$key = $this->prefix . $key;
+		if (!$this->isConnected) $this->connect();
+		$key = $this->options['prefix'] . $key;
 		$meta = $this->memcache->get($key);
 		if (!$meta) return NULL;
 
@@ -109,11 +146,12 @@ class MemcachedStorage extends Nette\Object implements ICacheStorage
 	 */
 	public function write($key, $data, array $dp)
 	{
+		if (!$this->isConnected) $this->connect();
 		if (isset($dp[Cache::ITEMS])) {
 			throw new \NotSupportedException('Dependent items are not supported by MemcachedStorage.');
 		}
 
-		$key = $this->prefix . $key;
+		$key = $this->options['prefix'] . $key;
 		$meta = array(
 			self::META_DATA => $data,
 		);
@@ -149,7 +187,8 @@ class MemcachedStorage extends Nette\Object implements ICacheStorage
 	 */
 	public function remove($key)
 	{
-		$this->memcache->delete($this->prefix . $key, 0);
+		if (!$this->isConnected) $this->connect();
+		$this->memcache->delete($this->options['prefix'] . $key, 0);
 	}
 
 
@@ -161,6 +200,7 @@ class MemcachedStorage extends Nette\Object implements ICacheStorage
 	 */
 	public function clean(array $conds)
 	{
+		if (!$this->isConnected) $this->connect();
 		if (!empty($conds[Cache::ALL])) {
 			$this->memcache->flush();
 
